@@ -1140,3 +1140,509 @@ FROM previous_month
 
 ORDER BY region, month;                    
 '''
+#=========================
+#--------KEEP SQL---------
+# ========================
+
+#SCHEMA
+
+'''
+customers
+---------
+customer_id       INT PRIMARY KEY
+customer_name     VARCHAR(100)
+city              VARCHAR(80)
+
+orders
+------
+order_id          INT PRIMARY KEY
+customer_id       INT FOREIGN KEY
+status            VARCHAR(30)
+
+order_items
+-----------
+order_item_id     INT PRIMARY KEY
+order_id          INT FOREIGN KEY
+quantity          INT
+unit_price        NUMERIC(12,2)
+discount_pct      NUMERIC(5,2)
+''' 
+
+##1 — Rank customers by spending within each city
+
+'''
+WITH T AS(
+SELECT 
+     c.customer_id ,
+     c.customer_name,
+     c.city,
+     SUM(
+     (oi.quantity * oi.unit_price) * (1- COALESCE(oi.discount_pct,0)/100.0)
+     ) AS total_spending
+FROM customers c 
+LEFT JOIN orders o 
+ON c.customer_id = o.customer_id 
+AND o.status = 'Completed'
+LEFT JOIN order_items oi 
+ON o.order_id = oi.order_id 
+GROUP BY c.customer_id ,
+         c.customer_name,
+         c.city 
+), R AS (
+SELECT  
+    customer_id ,
+    customer_name,
+    city,
+    total_spending,
+    DENSE_RANK()OVER(
+                     PARTITION BY city
+                     ORDER BY total_spending DESC) AS rnk_customers
+FROM T 
+)
+SELECT * FROM R 
+ORDER BY total_spending DESC
+
+'''
+#-------------------------------------
+##2 — Cumulative monthly revenue for each employee
+'''
+employees
+---------
+employee_id       INT PRIMARY KEY
+employee_name     VARCHAR(100)
+
+orders
+------
+order_id          INT PRIMARY KEY
+employee_id       INT FOREIGN KEY
+order_date        DATE
+status            VARCHAR(30)
+
+order_items
+-----------
+order_item_id     INT PRIMARY KEY
+order_id          INT FOREIGN KEY
+quantity          INT
+unit_price        NUMERIC(12,2)
+discount_pct      NUMERIC(5,2)
+'''
+##2 — Cumulative monthly revenue for each employee
+'''
+WITH T AS(
+SELECT 
+      e.employee_id ,
+      e.employee_name,
+      SUM(
+           (oi.quantity * oi.unit_price) * (1- COALESCE(oi.discount_pct,0)/100.0)
+           ) AS monthly_revenue ,
+    DATE_TRUNC('month',o.order_date) AS month 
+
+FROM employees e
+LEFT JOIN orders o 
+ON o.employee_id = e.employee_id 
+AND o.status = 'Completed'
+LEFT JOIN order_items oi 
+ON o.order_id = oi.order_id
+GROUP BY e.employee_id ,
+         e.employee_name,
+         DATE_TRUNC('month',o.order_date)
+), C AS (
+SELECT 
+      employee_id ,
+      employee_name,
+      month,
+      monthly_revenue ,
+      SUM(monthly_revenue)OVER(PARTITION BY employee_id 
+                            ORDER BY month ASC ) AS cumulative_revenue_4employees
+FROM T 
+)
+SELECT * FROM C
+ORDER BY month ASC , monthly_revenue DESC
+'''
+
+#----------------------------------------------
+
+##3 — Latest completed order for each customer
+
+'''
+customers
+---------
+customer_id       INT PRIMARY KEY
+customer_name     VARCHAR(100)
+
+orders
+------
+order_id          INT PRIMARY KEY
+customer_id       INT FOREIGN KEY
+order_date        DATE
+status            VARCHAR(30)
+'''
+"""
+WITH T AS(
+SELECT  
+      c.customer_id ,
+      c.customer_name ,
+      o.order_date ,
+      o.order_id ,
+      RANK()OVER(PARTITION BY c.customer_id 
+                       ORDER BY o.order_date DESC) AS latest_order
+FROM customers c
+JOIN orders o 
+ON c.customer_id = o.customer_id 
+WHERE o.status = 'Completed'
+)
+SELECT * FROM T 
+WHERE latest_order = 1
+
+#--------------------------------------
+
+##4 — Rank each customer's orders by value
+
+'''
+customers
+---------
+customer_id       INT PRIMARY KEY
+customer_name     VARCHAR(100)
+
+orders
+------
+order_id          INT PRIMARY KEY
+customer_id       INT FOREIGN KEY
+status            VARCHAR(30)
+
+order_items
+-----------
+order_item_id     INT PRIMARY KEY
+order_id          INT FOREIGN KEY
+quantity          INT
+unit_price        NUMERIC(12,2)
+discount_pct      NUMERIC(5,2)
+'''
+
+"""
+SELECT 
+      c.customer_id ,
+      c.customer_name,
+      SUM(
+      (oi.quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0)
+       ) AS total_spending
+FROM customers c
+LEFT JOIN orders o 
+ON c.customer_id o.customer_id 
+AND o.status = 'Completed'
+LEFT JOIN order_items oi
+ON oi.order_id = o.order_id 
+GROUP BY c.customer_id ,
+         c.customer_name 
+), R AS (
+SELECT 
+      customer_id ,
+      customer_name,
+      total_spending ,
+      DENSE_RANK()OVER(PARTITON BY customer_id 
+                       ORDER BY total_spending DESC) AS rnk_orders_value
+FROM T 
+)
+SELECT * FROM R
+ORDER BY total_spending DESC
+"""
+#---------------------------------------------
+#5 — Top 3 products by revenue within each category
+
+'''
+categories
+----------
+category_id       INT PRIMARY KEY
+category_name     VARCHAR(100)
+
+products
+--------
+product_id        INT PRIMARY KEY
+product_name      VARCHAR(150)
+category_id       INT FOREIGN KEY
+
+orders
+------
+order_id          INT PRIMARY KEY
+status            VARCHAR(30)
+
+order_items
+-----------
+order_item_id     INT PRIMARY KEY
+order_id          INT FOREIGN KEY
+product_id        INT FOREIGN KEY
+quantity          INT
+unit_price        NUMERIC(12,2)
+discount_pct      NUMERIC(5,2)
+'''
+#5 — Top 3 products by revenue within each category
+
+'''
+WITH T AS(
+SELECT 
+      c.category_id ,
+      c.category_name,
+      p.product_id ,
+      p.product_name,
+      SUM(
+      (oi.quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0)
+      ) AS total_revenue 
+FROM categories c 
+JOIN products p
+ON p.category_id = c.category_id 
+JOIN order_items oi 
+ON oi.product_id = p.product_id 
+JOIN orders o 
+ON o.order_id = oi.order_id 
+WHERE o.status = 'Completed'
+GROUP BY c.category_id ,
+         c.category_name
+), R AS(
+SELECT 
+      category_id ,
+      category_name,
+      product_id ,
+      product_name,
+      total_revenue ,
+      DENSE_RANK()OVER(PARTITION BY category_id ,
+                                    category_name
+                        ORDER BY total_revenue DESC) AS top_products
+FROM T 
+)
+SELECT * FROM R 
+WHERE top_products <=3
+'''
+
+#------------------------------------------------------
+'''
+customers
+---------
+customer_id       INT PRIMARY KEY
+region            VARCHAR(80)
+
+orders
+------
+order_id          INT PRIMARY KEY
+customer_id       INT FOREIGN KEY
+status            VARCHAR(30)
+
+order_items
+-----------
+order_item_id     INT PRIMARY KEY
+order_id          INT FOREIGN KEY
+quantity          INT
+unit_price        NUMERIC(12,2)
+discount_pct      NUMERIC(5,2)
+'''
+##6 — Average order value for each region
+
+'''
+WITH T AS(
+SELECT 
+      c.customer_id ,
+      c.region ,
+      SUM(
+            (oi.quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0)
+            ) AS total_revenue,
+     COUNT(o.order_id) AS num_of_orders
+
+FROM customers c
+LEFT JOIN orders o 
+ON o.customer_id = c.customer_id 
+LEFT JOIN order_items oi 
+ON o.order_id = oi.order_id 
+GROUP BY c.region 
+), L AS(
+SELECT 
+   customer_id ,
+   region ,
+   (total_revenue / num_of_orders) AS avg_order_value
+FROM T    
+)
+SELECT 
+    region ,
+     avg_order_value
+FROM L 
+
+'''
+
+#-----------------------------------------------------
+'''
+customers
+---------
+customer_id       INT PRIMARY KEY
+customer_name     VARCHAR(100)
+
+orders
+------
+order_id          INT PRIMARY KEY
+customer_id       INT FOREIGN KEY
+status            VARCHAR(30)
+
+order_items
+-----------
+order_item_id     INT PRIMARY KEY
+order_id          INT FOREIGN KEY
+quantity          INT
+unit_price        NUMERIC(12,2)
+discount_pct      NUMERIC(5,2)
+'''
+##7 — Customers spending above average customer spending
+
+'''
+SELECT 
+      c.customer_id ,
+      c.customer_name,
+      SUM(
+                  (oi.quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0)
+                  ) AS total_spending,
+     AVG((oi.quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0)) OVER() AS avg_spending
+FROM customers c 
+JOIN orders o 
+ON o.customer_id = c.customer_id 
+JOIN order_items oi 
+ON o.order_id = oi.order_id 
+WHERE o.status = 'Completed'
+GROUP BY c.customer_id ,
+         c.customer_name
+HAVING SUM((oi.quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0)
+) > AVG((oi.quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0)) OVER()
+  
+'''
+#---------------------------------------------
+
+#8 
+
+'''
+products
+--------
+product_id        INT PRIMARY KEY
+product_name      VARCHAR(150)
+
+orders
+------
+order_id          INT PRIMARY KEY
+status            VARCHAR(30)
+
+order_items
+-----------
+order_item_id     INT PRIMARY KEY
+order_id          INT FOREIGN KEY
+product_id        INT FOREIGN KEY
+quantity          INT
+
+returns
+-------
+return_id         INT PRIMARY KEY
+order_item_id     INT FOREIGN KEY
+return_status     VARCHAR(30)
+returned_quantity INT
+'''
+
+##8 — Return rate for each product
+
+'''
+WITH COMPLETED_O AS (
+
+SELECT 
+     p.product_id ,
+     p.product_name,
+     SUM((oi.quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0) AS completed_revenue
+FROM products p
+LEFT JOIN order_items oi 
+ON oi.product_id = p.product_id 
+LEFT JOIN orders o 
+ON o.order_id = oi.order_id 
+AND o.status ='Completed'
+GROUP BY p.product_id ,
+         p.product_name
+), 
+
+RETURNED_O AS(
+
+SELECT  
+    p.product_id ,
+    p.product_name,
+    SUM((r.returned_quantity * oi.unit_price) * (1 - COALESCE(oi.discount_pct,0)/100.0) AS returned_revenue
+FROM products p
+LEFT JOIN order_items oi 
+ON oi.product_id = p.product_id 
+LEFT JOIN returns r
+ON oi.order_item_id = r.order_item_id 
+AND r.return_status= 'Approved'
+GROUP BY p.product_id ,
+         p.product_name
+),
+F AS (
+SELECT co.product_id ,
+       co.product_name,
+       co.completed_revenue,
+       ro.returned_revenue,
+       ROUND((ro.returned_revenue / NULL_IF(co.completed_revenue,0)* 100,2) AS return_rate
+FROM COMPLETED_O co
+JOIN RETURNED_O ro
+ON co.product_id = ro.product_id      
+)
+SELECT * FROM F 
+
+'''
+#----------------------------------------
+
+'''
+categories
+----------
+category_id       INT PRIMARY KEY
+category_name     VARCHAR(100)
+
+products
+--------
+product_id        INT PRIMARY KEY
+product_name      VARCHAR(150)
+category_id       INT FOREIGN KEY
+
+order_items
+-----------
+order_item_id     INT PRIMARY KEY
+order_id          INT FOREIGN KEY
+product_id        INT FOREIGN KEY
+
+returns
+-------
+return_id         INT PRIMARY KEY
+order_item_id     INT FOREIGN KEY
+return_status     VARCHAR(30)
+refund_amount     NUMERIC(12,2)
+'''
+##9 — Calculate total approved refunds by product category 
+# and rank categories by their total refund amounts.
+
+'''
+WITH T AS(
+SELECT
+      c.category_id ,
+      c.category_name,
+      p.product_id,
+      p.product_name,
+      SUM(r.refund_amount) AS total_approved_refunds
+FROM categories c
+LEFT JOIN products p
+ON p.category_id = c.category_id
+LEFT JOIN order_items oi 
+ON oi.product_id = p.product_id
+LEFT JOIN returns r
+ON oi.order_item_id = r.order_item_id
+AND r.return_status = 'Approved'
+GROUP BY c.category_id ,
+         c.category_name
+),S AS(
+SELECT 
+      category_name,
+      p.product_name,
+      total_approved_refunds,
+      DENSE_RANK()OVER(PARTITION BY category_id,category_name
+                      ORDER BY total_approved_refunds DESC) AS rnk_categories
+FROM T 
+)
+SELECT * FROM S
+'''
+
